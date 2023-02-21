@@ -1,4 +1,6 @@
+#![feature(iter_intersperse)]
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::str::Chars;
 use std::usize;
 
@@ -127,6 +129,13 @@ impl Program {
         });
         self.exprs.iter().map(|expr| expr.eval(&env)).collect()
     }
+    fn eval_with_env(&self, env: &mut Env) -> Vec<Result<Expression, EvalError>> {
+        //println!("    DEBUG : Env =  {:?}",&env);
+        self.defs.iter().for_each(|def| {
+            env.insert(def.clone());
+        });
+        self.exprs.iter().map(|expr| expr.eval(&env)).collect()
+    }
 }
 
 impl Env {
@@ -239,10 +248,10 @@ impl Definition {
     }
     fn get_body(&self) -> Expression {
         match self {
-            Definition::Atom { head, body, local }
-            | Definition::Call { head, body, local }
-            | Definition::LazyCall { head, body, local }
-            | Definition::StructCall { head, body, local } => body.clone(),
+            Definition::Atom { body, .. }
+            | Definition::Call { body, .. }
+            | Definition::LazyCall { body, .. }
+            | Definition::StructCall { body, .. } => body.clone(),
         }
     }
     fn get_local(&self) -> Localization {
@@ -395,7 +404,7 @@ impl Expression {
                         let c = Self::eval_primitive(name.as_str(), &new_args)(a, b);
                         return Ok(Expression::number(c, *local));
                     }
-                    if !env.call_map.contains_key(name){
+                    if !env.call_map.contains_key(name) {
                         return Err(EvalError::GenericErr(
                             *local,
                             "Call <{name}> is not defined",
@@ -439,12 +448,28 @@ impl Expression {
             }
             Expression::StructCall { name, local, args } => {
                 if env.struct_map.contains_key(name) {
-                    let iterator = args.iter().map(|x| x.eval(env)).filter(|x| x.is_ok()).map(|x| x.unwrap());
-                    if iterator.clone().count() == args.len(){
-                        return Ok(Expression::struct_call( name.into(), iterator.collect(),*local ));
+                    if env
+                        .struct_map
+                        .get(name)
+                        .unwrap()
+                        .iter()
+                        .any(|(pat, _)| pat.get_struct_call_args().unwrap().len() == args.len())
+                    {
+                        let iterator = args
+                            .iter()
+                            .map(|x| x.eval(env))
+                            .filter(|x| x.is_ok())
+                            .map(|x| x.unwrap());
+                        if iterator.clone().count() == args.len() {
+                            return Ok(Expression::struct_call(
+                                name.into(),
+                                iterator.collect(),
+                                *local,
+                            ));
+                        }
                     }
-                    
-                }  {
+                }
+                {
                     return Err(EvalError::GenericErr(*local, "Struct is not defined"));
                 }
             }
@@ -568,14 +593,39 @@ impl Expression {
         }
     }
 
-    fn equal(&self,other:&Self)->bool{
-        match  (self,other){
-            (Expression::Number { value:v1, .. }, Expression::Number { value:v2, .. }) => v1 == v2,
-            (Expression::Call { name:n1, args:a1, .. }, Expression::Call { name:n2, args:a2, .. }) => n1 == n2 && a1.iter().zip(a2).all(|(x,y)| x.equal(y)) ,
-            (Expression::LazyCall { name:n1, args:a1, .. }, Expression::LazyCall { name:n2, args:a2, .. }) => n1 == n2 && a1.iter().zip(a2).all(|(x,y)| x.equal(y)),
-            (Expression::StructCall { name:n1, args:a1, .. }, Expression::StructCall { name:n2, args:a2, .. }) => n1 == n2 && a1.iter().zip(a2).all(|(x,y)| x.equal(y)),
-            (Expression::Variable { name:n1, .. }, Expression::Variable { name:n2, .. }) => n1==n2,
-            _=>false
+    fn equal(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Expression::Number { value: v1, .. }, Expression::Number { value: v2, .. }) => {
+                v1 == v2
+            }
+            (
+                Expression::Call {
+                    name: n1, args: a1, ..
+                },
+                Expression::Call {
+                    name: n2, args: a2, ..
+                },
+            ) => n1 == n2 && a1.iter().zip(a2).all(|(x, y)| x.equal(y)),
+            (
+                Expression::LazyCall {
+                    name: n1, args: a1, ..
+                },
+                Expression::LazyCall {
+                    name: n2, args: a2, ..
+                },
+            ) => n1 == n2 && a1.iter().zip(a2).all(|(x, y)| x.equal(y)),
+            (
+                Expression::StructCall {
+                    name: n1, args: a1, ..
+                },
+                Expression::StructCall {
+                    name: n2, args: a2, ..
+                },
+            ) => n1 == n2 && a1.iter().zip(a2).all(|(x, y)| x.equal(y)),
+            (Expression::Variable { name: n1, .. }, Expression::Variable { name: n2, .. }) => {
+                n1 == n2
+            }
+            _ => false,
         }
     }
 
@@ -615,7 +665,7 @@ impl Expression {
                     local: _,
                 },
             ) => {
-                if n1 != n2 {
+                if n1 != n2 || a1.len() != a2.len() {
                     return false;
                 }
                 for (a, b) in a1.iter().zip(a2.iter()) {
@@ -650,7 +700,7 @@ impl Expression {
                     local: _,
                 },
             ) => {
-                if n1 != n2 {
+                if n1 != n2 || a1.len() != a2.len() {
                     return false;
                 }
                 for (a, b) in a1.iter().zip(a2.iter()) {
@@ -664,8 +714,8 @@ impl Expression {
                 Expression::Variable { name, local: _ },
                 expr @ Expression::Number { value: _, local: _ },
             ) => {
-                if bindings.contains_key(name){
-                    return expr.equal (bindings.get(name.into()).unwrap());
+                if bindings.contains_key(name) {
+                    return expr.equal(bindings.get(name.into()).unwrap());
                 }
                 bindings.insert(name.into(), expr.clone());
                 return true;
@@ -678,8 +728,8 @@ impl Expression {
                     local: _,
                 },
             ) => {
-                if bindings.contains_key(name){
-                    return expr.equal (bindings.get(name.into()).unwrap());
+                if bindings.contains_key(name) {
+                    return expr.equal(bindings.get(name.into()).unwrap());
                 }
                 bindings.insert(name.into(), expr.clone());
                 return true;
@@ -692,8 +742,8 @@ impl Expression {
                     local: _,
                 },
             ) => {
-                if bindings.contains_key(name){
-                    return expr.equal (bindings.get(name.into()).unwrap());
+                if bindings.contains_key(name) {
+                    return expr.equal(bindings.get(name.into()).unwrap());
                 }
                 bindings.insert(name.into(), expr.clone());
                 return true;
@@ -1256,37 +1306,135 @@ fn var_expr_should_suceed() {
 
 #[test]
 fn sum_expr_should_suceed() {
-    let a = " 1 * 2 + 3 * 4 + 5 +  6 + 7 + 8".chars();
+    let a = " 1 *  2 + 3 * 4 + 5 +  6 + 7 + 8".chars();
     let res = SumExpr.parse(a, Localization::default()).unwrap();
     println!("{:?}", res);
     assert!(false)
 }
 
-use std::io::{self, BufRead};
-fn main() {
+fn repl() {
+    use std::io::Write;
+    use std::io::{self, BufRead};
     let stdin = io::stdin();
+    let mut env = Env::default();
+    loop {
+        let mut buf = String::new();
+
+        stdin.read_line(&mut buf);
+        println!("\nParsing___________________________ ");
+
+        println!("\nRead :");
+        println!("         {buf}");
+        if let Ok(a) = Toplevel.parse(buf.chars(), Localization::default()) {
+            println!("\nLeft :");
+            println!("         {}", a.2.as_str());
+            //println!("{:#?}",&a.0);
+            println!("{}", &a.0);
+            //a.0.display_as_tree(2);
+            println!("\nEvaluating________________________ ");
+            a.0.eval_with_env(&mut env)
+                .iter()
+                .for_each(|result| match result {
+                    Ok(x) => {
+                        println!("\n   SUCCESS!. ");
+                        //println!("{:4^-#?}",&x);
+                        println!("    {x}");
+                    }
+                    Err(err) => {
+                        //println!("\n   FAIL!. \n  {:4>#?}", err);
+                        println!("\n   FAIL!. \n  {:?}", err);
+                    }
+                });
+        }
+        print!("___________________________________________________________________\n>> ");
+        io::stdout().flush().unwrap();
+    }
+}
+fn main() {
+    repl();
+}
+
+fn main10() {
+    use std::io::{self, BufRead};
+    let stdin = io::stdin();
+    let mut env = Env::default();
+
     for line in stdin.lock().lines() {
+        print!("\n>> ");
         let lines = line.unwrap();
-        println!("Read :");
+        println!("\nRead :");
         println!("       :{lines}");
         if let Ok(a) = Toplevel.parse(lines.chars(), Localization::default()) {
-            println!("Left :");
-            println!("     : {}", a.2.as_str());
-            a.0.display_as_tree(2);
-            a.0.eval().iter().for_each(|result| match result {
-                Ok(x) => {
-                    println!("SUCCESS!. \n\n\n");
-                    x.display_as_tree(2);
-                }
-                Err(err) => {
-                    println!("FAIL!. \n\n\n{:?}", err);
-                }
-            });
+            println!("\nLeft :");
+            println!("     : {} \nResult\n", a.2.as_str());
+            println!("{:#?}", &a.0);
+            //a.0.display_as_tree(2);
+            a.0.eval_with_env(&mut env)
+                .iter()
+                .for_each(|result| match result {
+                    Ok(x) => {
+                        println!("\nSUCCESS!. \n");
+                        println!("{:#?}", &x);
+                    }
+                    Err(err) => {
+                        println!("\nFAIL!. \n\n\n{:?}", err);
+                    }
+                });
+        }
+        print!("\n>> ");
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut fun = |name: &String, args: &Vec<Expression>, sep1: &str, sep2: &str| {
+            write!(f, " {name}{sep1}");
+            let s: String = args
+                .iter()
+                .map(|x| format!(" {} ", x))
+                .intersperse(",".to_string())
+                .collect();
+            write!(f, "{}", s);
+            write!(f, "{sep2} ")
+        };
+        match self {
+            Expression::Number { value, local } => write!(f, " {value} "),
+            Expression::Call { name, args, local } => fun(name, args, "(", ")"),
+            Expression::LazyCall { name, args, local } => fun(name, args, "[", "]"),
+            Expression::StructCall { name, args, local } => fun(name, args, "{", "}"),
+            Expression::Variable { name, local } => write!(f, " {name} "),
         }
     }
 }
 
+impl Display for Definition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Definition::Atom { head, body, .. }
+            | Definition::Call { head, body, .. }
+            | Definition::LazyCall { head, body, .. }
+            | Definition::StructCall { head, body, .. } => write!(f, "{head} = {body}"),
+        }
+    }
+}
+
+impl Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Program         :\n")?;
+        write!(f, "    Definitions :\n")?;
+        for x in self.defs.as_slice() {
+            write!(f, "                   {x}")?;
+        }
+        write!(f, "\n    Expressions :\n")?;
+        for x in self.exprs.as_slice() {
+            write!(f, "                   {x}")?;
+        }
+        write!(f, "\nEnd")
+    }
+}
+
 fn main3() {
+    use std::io::{self, BufRead};
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         print!(">> ");
@@ -1295,7 +1443,8 @@ fn main3() {
         println!("       :{lines}");
         let a = Expr.parse(lines.chars(), Localization::default()).unwrap();
         println!("       :{}", a.2.as_str());
-        a.0.display_as_tree(0)
+        println!("       :{:#?}", a.0);
+        //a.0.display_as_tree(0)
     }
 }
 
