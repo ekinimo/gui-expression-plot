@@ -835,7 +835,7 @@ impl Expression {
             }
             Expression::LazyCall { name, args, local } => {
                 println!(
-                    "LaztCall <{name}> @ {}:{} -- {}:{}",
+                    "LazyCall <{name}> @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
                 );
                 args.iter().for_each(|e| e.display_as_tree(n + 2))
