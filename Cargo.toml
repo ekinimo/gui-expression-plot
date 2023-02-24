@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 druid = "0.7.0"
 parser_combinator = { git = "https://github.com/ekinimo/Kirby", branch = 'State' }
+[dependencies.malachite]
+version = "0.3.0"
