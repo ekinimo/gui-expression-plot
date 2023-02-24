@@ -13,7 +13,7 @@ use std::usize;
 use druid::widget::Label;
 use druid::{AppLauncher, Widget, WindowDesc};
 
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
 pub struct Localization {
     start_line: usize,
     start_col: usize,
@@ -50,7 +50,7 @@ impl Localization {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug,   Hash)]
 pub enum Expression {
     Number {
         value: malachite::Integer,
@@ -81,6 +81,13 @@ pub enum Expression {
     },
 }
 
+impl PartialEq for Expression {
+    fn eq(&self, other: &Self) -> bool {
+        self.equal(other)
+    }
+}
+
+impl Eq for Expression{}
 #[derive(Clone, Debug, PartialEq)]
 pub enum Definition {
     Atom {
@@ -110,6 +117,7 @@ pub struct Env {
     call_map: HashMap<String, Vec<(Expression, Expression)>>,
     lazy_call_map: HashMap<String, Vec<(Expression, Expression)>>,
     struct_map: HashMap<String, Vec<(Expression, Expression)>>,
+    memory: HashMap<Expression, Expression>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -137,7 +145,7 @@ impl Program {
         self.defs.iter().for_each(|def| {
             env.insert(def.clone());
         });
-        self.exprs.iter().map(|expr| expr.eval(&env)).collect()
+        self.exprs.iter().map(|expr| expr.eval(&mut env)).collect()
     }
     fn eval_with_env(&self, env: &mut Env) -> Vec<Result<Expression, EvalError>> {
         //println!("    DEBUG : Env =  {:?}",&env);
@@ -165,26 +173,22 @@ impl Env {
                     .contains_key(&head.get_variable_name().unwrap())
                 {
                     return false;
-                } else {
-                    self.const_map
-                        .insert(head.get_variable_name().unwrap().into(), body.clone());
-                    return true;
                 }
+                self.const_map
+                    .insert(head.get_variable_name().unwrap(), body);
+                true
             }
             Definition::Call { head, body, .. } => {
                 if self.call_map.contains_key(&head.get_call_name().unwrap()) {
                     self.call_map
                         .get_mut(&head.get_call_name().unwrap())
                         .unwrap()
-                        .push((head.to_owned(), body));
-                    return true;
-                } else {
-                    self.call_map.insert(
-                        head.get_call_name().unwrap().into(),
-                        vec![(head.to_owned(), body)],
-                    );
+                        .push((head, body));
                     return true;
                 }
+                self.call_map
+                    .insert(head.get_call_name().unwrap(), vec![(head, body)]);
+                true
             }
             Definition::LazyCall { head, body, .. } => {
                 if self
@@ -194,15 +198,12 @@ impl Env {
                     self.lazy_call_map
                         .get_mut(&head.get_lazy_call_name().unwrap())
                         .unwrap()
-                        .push((head.to_owned(), body));
-                    return true;
-                } else {
-                    self.lazy_call_map.insert(
-                        head.get_lazy_call_name().unwrap().into(),
-                        vec![(head.to_owned(), body.to_owned())],
-                    );
+                        .push((head, body));
                     return true;
                 }
+                self.lazy_call_map
+                    .insert(head.get_lazy_call_name().unwrap(), vec![(head, body)]);
+                true
             }
             Definition::StructCall { head, body, .. } => {
                 if self
@@ -212,15 +213,12 @@ impl Env {
                     self.struct_map
                         .get_mut(&head.get_struct_call_name().unwrap())
                         .unwrap()
-                        .push((head.to_owned(), body));
-                    return true;
-                } else {
-                    self.struct_map.insert(
-                        head.get_struct_call_name().unwrap().into(),
-                        vec![(head.to_owned(), body.to_owned())],
-                    );
+                        .push((head, body));
                     return true;
                 }
+                self.struct_map
+                    .insert(head.get_struct_call_name().unwrap(), vec![(head, body)]);
+                true
             }
         }
     }
@@ -273,28 +271,16 @@ impl Definition {
         }
     }
     fn is_atom(&self) -> bool {
-        match self {
-            Self::Atom { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Atom { .. })
     }
     fn is_call(&self) -> bool {
-        match self {
-            Self::Call { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Call { .. })
     }
     fn is_lazy_call(&self) -> bool {
-        match self {
-            Self::LazyCall { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::LazyCall { .. })
     }
     fn is_struct_call(&self) -> bool {
-        match self {
-            Self::StructCall { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Call { .. })
     }
 
     fn from_expression(head: &Expression, body: &Expression, local: Localization) -> Option<Self> {
@@ -353,45 +339,33 @@ impl Definition {
 
 impl Expression {
     fn eval_primitive(name: &str, args: &Vec<Expression>) -> impl Fn(Integer, Integer) -> Integer {
-        let bin = match (name, args.len()) {
+        match (name, args.len()) {
             ("+", 2) => |x, y| x + y,
             ("-", 2) => |x, y| x - y,
             ("/", 2) => |x, y| x / y,
             ("*", 2) => |x, y| x * y,
             ("mod", 2) => |x, y| x % y,
-            ("max", 2) => |x: Integer, y| x.max(y),
-            ("min", 2) => |x: Integer, y| x.min(y),
+            ("max", 2) => std::cmp::Ord::max,
+            ("min", 2) => std::cmp::Ord::min,
             ("band", 2) => |x, y| x & (y),
             ("bor", 2) => |x, y| x | (y),
             ("bxor", 2) => |x, y| x ^ (y),
 
             _ => panic!("this shouldnt happen"),
-        };
-        bin
-    }
-
-    fn eval(&self, env: &Env) -> Result<Self, EvalError> {
-        match self.eval_aux(env) {
-            Ok(x) => {
-                if !x.is_call() && !x.is_lazy_call() && !x.is_variable() {
-                    return Ok(x);
-                } else {
-                    return x.eval_aux(env);
-                }
-            }
-            err @ Err(_) => return err.clone(),
         }
     }
 
-    fn eval_aux(&self, env: &Env) -> Result<Self, EvalError> {
+    fn eval(&self, env: &mut Env) -> Result<Self, EvalError> {
         let map: HashSet<&str> = HashSet::from([
             "+", "-", "/", "*", "mod", "max", "min", "band", "bor", "bxor",
         ]);
 
+        if env.memory.contains_key(self) {
+            //println!("Cache hit!");
+            return Ok(env.memory.get(self).unwrap().clone());
+        }
         let ret = match self {
-            expr @ Expression::Number { .. } | expr @ Expression::Constant { .. } => {
-                Ok(expr.clone())
-            }
+            expr @ (Expression::Number { .. } | Expression::Constant { .. }) => Ok(expr.clone()),
 
             Expression::Call {
                 name: n_expr,
@@ -425,19 +399,18 @@ impl Expression {
                     for (head, body) in env.call_map.get(name).unwrap().iter() {
                         let mut bindings = HashMap::default();
                         if head.pattern_match(&new_expr, &mut bindings) {
-                            return Ok(body.replace_var(&bindings));
+                            return body.replace_var(&bindings).eval(env);
                         }
                     }
                     return Err(EvalError::GenericErr(
                         *local,
                         "Call  did not match any of the patterns",
                     ));
-                } else {
-                    return Err(EvalError::GenericErr(
-                        *local,
-                        "Call <{name}> is not defined",
-                    ));
                 }
+                return Err(EvalError::GenericErr(
+                    *local,
+                    "Call <{name}> is not defined",
+                ));
             }
             expr @ Expression::LazyCall {
                 name: n1, local, ..
@@ -455,9 +428,8 @@ impl Expression {
                         *local,
                         "Lazy Call did not match any of the patterns",
                     ));
-                } else {
-                    return Err(EvalError::GenericErr(*local, "Lazy Call is not defined"));
                 }
+                return Err(EvalError::GenericErr(*local, "Lazy Call is not defined"));
             }
             Expression::StructCall {
                 name: n1,
@@ -465,28 +437,31 @@ impl Expression {
                 args,
             } => {
                 let name = &n1.get_const_or_var_name().unwrap();
-                if env.struct_map.contains_key(name) {
-                    if env
+
+                if env.struct_map.contains_key(name)
+                    && env
                         .struct_map
                         .get(name)
                         .unwrap()
                         .iter()
                         .any(|(pat, _)| pat.get_struct_call_args().unwrap().len() == args.len())
-                    {
-                        let iterator = args
-                            .iter()
-                            .map(|x| x.eval(env))
-                            .filter(|x| x.is_ok())
-                            .map(|x| x.unwrap());
-                        if iterator.clone().count() == args.len() {
-                            return Ok(Expression::struct_call(
-                                *n1.clone(),
-                                iterator.collect(),
-                                *local,
-                            ));
-                        }
+                {
+                    
+                    let iterator : Vec<Expression> = args.clone()
+                        .iter_mut()
+                        .map(|x| x.eval(env))
+                        .filter(Result::is_ok)
+                        .map(Result::unwrap).collect();
+
+                    if iterator.len() == args.len() {
+                        return Ok(Expression::struct_call(
+                            *n1.clone(),
+                            iterator,
+                            *local,
+                        ));
                     }
                 }
+
                 {
                     return Err(EvalError::GenericErr(*local, "Struct is not defined"));
                 }
@@ -499,17 +474,18 @@ impl Expression {
                 }
             }
         };
-
+        env.memory.insert(self.clone(), ret.clone().unwrap());
         ret
     }
 
     fn get_all_call_args(&self) -> Option<Vec<Self>> {
         match self {
-            Expression::Number { .. } | Expression::Constant { .. } => None,
-            Expression::Call { args, .. } => Some(args.clone()),
-            Expression::LazyCall { args, .. } => Some(args.clone()),
-            Expression::StructCall { args, .. } => Some(args.clone()),
-            Expression::Variable { .. } => None,
+            Expression::Call { args, .. }
+            | Expression::LazyCall { args, .. }
+            | Expression::StructCall { args, .. } => Some(args.clone()),
+            Expression::Number { .. }
+            | Expression::Constant { .. }
+            | Expression::Variable { .. } => None,
         }
     }
     fn get_all_call_names(&self) -> Option<String> {
@@ -517,9 +493,9 @@ impl Expression {
             Expression::Variable { .. }
             | Expression::Number { .. }
             | Expression::Constant { .. } => None,
-            Expression::Call { name, .. } => name.get_const_or_var_name(),
-            Expression::LazyCall { name, .. } => name.get_const_or_var_name(),
-            Expression::StructCall { name, .. } => name.get_const_or_var_name(),
+            Expression::Call { name, .. }
+            | Expression::LazyCall { name, .. }
+            | Expression::StructCall { name, .. } => name.get_const_or_var_name(),
         }
     }
     fn get_all_names(&self) -> Option<String> {
@@ -600,34 +576,22 @@ impl Expression {
     }
 
     fn is_variable(&self) -> bool {
-        match self {
-            Self::Variable { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Variable { .. })
+    }
+    fn is_constant(&self) -> bool {
+        matches!(self, Self::Constant { .. })
     }
     fn is_number(&self) -> bool {
-        match self {
-            Self::Number { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Number { .. })
     }
     fn is_call(&self) -> bool {
-        match self {
-            Self::Call { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Call { .. })
     }
     fn is_lazy_call(&self) -> bool {
-        match self {
-            Self::LazyCall { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::LazyCall { .. })
     }
     fn is_struct_call(&self) -> bool {
-        match self {
-            Self::StructCall { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::StructCall { .. })
     }
 
     fn equal(&self, other: &Self) -> bool {
@@ -722,7 +686,7 @@ impl Expression {
                         return false;
                     }
                 }
-                return true;
+                true
             }
             (
                 Expression::Call {
@@ -804,29 +768,26 @@ impl Expression {
                         return false;
                     }
                 }
-                bindings.insert(n1.to_string(), *n2.to_owned());
-                return true;
+                bindings.insert(n1.to_string(), *n2.clone());
+                true
             }
 
             (
                 e1 @ Expression::Variable { name: n2, local: _ },
                 e2 @ Expression::Variable { name: n1, local: _ },
             ) => {
-                if n1 == n1 {
+                if n1 == n2 {
                     return true;
                 }
                 match (bindings.contains_key(n1), bindings.contains_key(n2)) {
                     (true, true) => {
-                        return bindings
-                            .get(n2.into())
-                            .unwrap()
-                            .equal(bindings.get(n1.into()).unwrap())
+                        return bindings.get(n2).unwrap().equal(bindings.get(n1).unwrap())
                     }
                     (true, false) => {
-                        bindings.insert(n2.into(), bindings.get(n1.into()).unwrap().to_owned());
+                        bindings.insert(n2.into(), bindings.get(n1).unwrap().clone());
                     }
                     (false, true) => {
-                        bindings.insert(n1.into(), bindings.get(n2.into()).unwrap().to_owned());
+                        bindings.insert(n1.into(), bindings.get(n2).unwrap().clone());
                     }
                     (false, false) => {
                         bindings.insert(n1.into(), e2.clone());
@@ -834,14 +795,14 @@ impl Expression {
                     }
                 }
 
-                return true;
+                true
             }
             (Expression::Variable { name, local: _ }, expr) => {
                 if bindings.contains_key(name) {
-                    return expr.equal(bindings.get(name.into()).unwrap());
+                    return expr.equal(bindings.get(name).unwrap());
                 }
                 bindings.insert(name.into(), expr.clone());
-                return true;
+                true
             }
             _ => false,
         }
@@ -849,9 +810,7 @@ impl Expression {
 
     fn replace_var(&self, bindings: &HashMap<String, Expression>) -> Self {
         match self {
-            expr @ Expression::Number { .. } | expr @ Expression::Constant { .. } => {
-                expr.to_owned()
-            }
+            expr @ (Expression::Number { .. } | Expression::Constant { .. }) => expr.clone(),
             Expression::Call { name, args, local } => Expression::Call {
                 name: Box::new(name.replace_var(bindings)),
                 args: args.iter().map(|x| x.replace_var(bindings)).collect(),
@@ -934,40 +893,40 @@ impl Expression {
                 println!(
                     " {value} : Number @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
-                )
+                );
             }
             Expression::Call { name, args, local } => {
                 println!(
                     "Call <{name}> @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
                 );
-                args.iter().for_each(|e| e.display_as_tree(n + 2))
+                args.iter().for_each(|e| e.display_as_tree(n + 2));
             }
             Expression::LazyCall { name, args, local } => {
                 println!(
                     "LazyCall <{name}> @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
                 );
-                args.iter().for_each(|e| e.display_as_tree(n + 2))
+                args.iter().for_each(|e| e.display_as_tree(n + 2));
             }
             Expression::StructCall { name, args, local } => {
                 println!(
                     "StructCall <{name}> @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
                 );
-                args.iter().for_each(|e| e.display_as_tree(n + 2))
+                args.iter().for_each(|e| e.display_as_tree(n + 2));
             }
             Expression::Variable { name, local } => {
                 println!(
                     " {name} : Variable @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
-                )
+                );
             }
             Expression::Constant { name, local } => {
                 println!(
                     " {name} : Constant @ {}:{} -- {}:{}",
                     local.start_line, local.start_col, local.end_line, local.end_col
-                )
+                );
             }
         }
     }
@@ -976,7 +935,7 @@ impl Expression {
 use parser_combinator::either::Either;
 //Parsers
 use parser_combinator::parser::{match_anything, match_literal};
-use parser_combinator::*;
+use parser_combinator::{Parse, ParseResult};
 
 #[derive(Clone, Debug)]
 pub enum ParseErrors<'a> {
@@ -991,10 +950,10 @@ pub enum EvalError {
 }
 
 //Tokens
-pub fn whitespace<'a>(
-    input: Chars<'a>,
+pub fn whitespace(
+    input: Chars<'_>,
     state: Localization,
-) -> parser_combinator::ParseResult<Chars<'a>, Localization, char, ParseErrors> {
+) -> ParseResult<Chars<'_>, Localization, char, ParseErrors> {
     let space = match_anything(|local: Localization| local.advance_by(0, 1)).validate(
         |character: &char| character == &' ',
         "alphabetic character".to_string(),
@@ -1105,10 +1064,10 @@ fn token_with_predicate2(
     -> ParseResult<'a, Chars<'a>, Localization, (String, Localization), ParseErrors<'a>> {
     move |input, state| {
         match_anything(|x: Localization| x.advance_by(0, 1))
-            .validate(predicate1.clone(), "token failed".to_string())
+            .validate(predicate1, "token failed".to_string())
             .pair(
                 match_anything(|x| Localization::advance_by(&x, 0, 1))
-                    .validate(predicate2.clone(), "token failed".to_string())
+                    .validate(predicate2, "token failed".to_string())
                     .zero_or_more(),
             )
             .transform_with_state(|(x, z), state| {
@@ -1132,12 +1091,12 @@ fn token_with_predicate3(
     -> ParseResult<'a, Chars<'a>, Localization, (String, Localization), ParseErrors<'a>> {
     move |input, state| {
         match_anything(|x: Localization| x.advance_by(0, 1))
-            .validate(predicate1.clone(), "token failed".to_string())
+            .validate(predicate1, "token failed".to_string())
             .triple(
                 match_anything(|x| Localization::advance_by(&x, 0, 1))
-                    .validate(predicate2.clone(), "token failed".to_string()),
+                    .validate(predicate2, "token failed".to_string()),
                 match_anything(|x| Localization::advance_by(&x, 0, 1))
-                    .validate(predicate3.clone(), "token failed".to_string())
+                    .validate(predicate3, "token failed".to_string())
                     .zero_or_more(),
             )
             .transform_with_state(|(x, y, z), state| {
@@ -1160,7 +1119,7 @@ fn token_with_predicate(
     move |mut input: Chars<'_>, mut state: Localization| {
         let old_state = state;
         let state_transformer = |_: &char, local: Localization| local.advance_by(0, 1);
-        let mut orig = input.clone();
+        let orig = input.clone();
         let mut c = 0;
         match input.next() {
             Some(x) => {
@@ -1172,20 +1131,16 @@ fn token_with_predicate(
         }
         let orig2 = orig.clone();
         let mut orig3 = orig.clone();
-        loop {
-            match orig.next() {
-                Some(x) => {
-                    if !predicate(&x) {
-                        break;
-                    } else {
-                        c += 1;
-                        state = state_transformer(&x, state);
-                        orig3.next();
-                    }
-                }
-                None => break,
+
+        for x in orig {
+            if !predicate(&x) {
+                break;
             }
+            c += 1;
+            state = state_transformer(&x, state);
+            orig3.next();
         }
+
         let s = orig2.as_str();
         Ok(((s[..c].to_string(), old_state), state, orig3))
     }
@@ -1341,7 +1296,8 @@ macro_rules! grammar_snippet {
     };
 }
 //fn((Expression, Vec<((Expression, Expression), Localization)>), Localization)
-pub fn build_right_assoc<'a>(
+#[must_use]
+pub fn build_right_assoc(
     list: (Expression, Vec<(Expression, Expression)>),
     _state: Localization,
 ) -> Expression {
@@ -1355,8 +1311,8 @@ pub fn build_right_assoc<'a>(
         })
     }
 }
-
-pub fn build_left_assoc<'a>(
+#[must_use]
+pub fn build_left_assoc(
     tree: Either<(Expression, Expression, Expression), Expression>,
     _state: Localization,
 ) -> Expression {
@@ -1377,8 +1333,8 @@ grammar_snippet! {
         let mut defs  = vec![];
 
         match x.0 {
-            Either::Left(def) => {defs.push(def.clone())},
-            Either::Right(expr) => {exprs.push(expr.clone())},
+            Either::Left(def) => {defs.push(def)},
+            Either::Right(expr) => {exprs.push(expr)},
         }
         x.1.iter().for_each(|(_,a)|
                             match a {
@@ -1395,7 +1351,7 @@ grammar_snippet! {
     Def of Definition    :=  (StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(VarExpr),EqualToken , Expr)
         .transform_with_state(|x, local |Definition::from_expression(&x.0, &x.2, local))
         .with_error_using_state(|_err,st,rest| ParseErrors::GenericErr(st, "definition", rest))
-        .validate(|x| x.is_some(), ParseErrors::Empty);
+        .validate(Option::is_some, ParseErrors::Empty);
 
 
     production := |x,_local| x.unwrap();
@@ -1600,7 +1556,7 @@ fn repl() {
                     }
                     Err(err) => {
                         //println!("\n   FAIL!. \n  {:4>#?}", err);
-                        println!("\n   FAIL!. \n  {:?}", err);
+                        println!("\n   FAIL!. \n  {err:?}");
                     }
                 });
         }
@@ -1635,7 +1591,7 @@ fn main10() {
                         println!("{:#?}", &x);
                     }
                     Err(err) => {
-                        println!("\nFAIL!. \n\n\n{:?}", err);
+                        println!("\nFAIL!. \n\n\n{err:?}");
                     }
                 });
         }
@@ -1649,10 +1605,10 @@ impl Display for Expression {
             write!(f, " {name}{sep1}")?;
             let s: String = args
                 .iter()
-                .map(|x| format!(" {} ", x))
+                .map(|x| format!(" {x} "))
                 .intersperse(",".to_string())
                 .collect();
-            write!(f, "{}", s)?;
+            write!(f, "{s}")?;
             write!(f, "{sep2} ")
         };
         match self {
@@ -1686,31 +1642,16 @@ impl Display for Definition {
 
 impl Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Program         :\n")?;
-        write!(f, "    Definitions :\n")?;
+        writeln!(f, "Program         :")?;
+        writeln!(f, "    Definitions :")?;
         for x in self.defs.as_slice() {
             write!(f, "                   {x}")?;
         }
-        write!(f, "\n    Expressions :\n")?;
+        writeln!(f, "\n    Expressions :")?;
         for x in self.exprs.as_slice() {
             write!(f, "                   {x}")?;
         }
-        write!(f, "\nEnd")
-    }
-}
-
-fn main3() {
-    use std::io::{self, BufRead};
-    let stdin = io::stdin();
-    for line in stdin.lock().lines() {
-        print!(">> ");
-        let lines = line.unwrap();
-        println!("Result :");
-        println!("       :{lines}");
-        let a = Expr.parse(lines.chars(), Localization::default()).unwrap();
-        println!("       :{}", a.2.as_str());
-        println!("       :{:#?}", a.0);
-        //a.0.display_as_tree(0)
+        writeln!(f, "\nEnd")
     }
 }
 
@@ -1719,12 +1660,11 @@ fn build_ui() -> impl Widget<()> {
 }
 
 fn main2() {
-    let main_window = WindowDesc::new(|| build_ui())
+    let main_window = WindowDesc::new(build_ui)
         .window_size((600.0, 400.0))
         .title("My first Druid App");
-    let initial_data = ();
 
     AppLauncher::with_window(main_window)
-        .launch(initial_data)
+        .launch(())
         .expect("Failed to launch application");
 }
