@@ -1,4 +1,6 @@
+#![warn(clippy::pedantic)]
 #![allow(dead_code)]
+#![allow(clippy::suspicious)]
 #![feature(box_patterns)]
 #![feature(iter_intersperse)]
 use malachite::Integer;
