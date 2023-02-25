@@ -1355,10 +1355,17 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    Expr         := SumExpr.pair(SemiColonToken).first();
+    Expr         := ExprM.pair(SemiColonToken).first();
       
     //precondition := |mut input : Chars,_| input.any(|char| !char.is_whitespace());
     error        :=  |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, idt)),"sum", rest)
+}
+
+grammar_snippet! {
+    ExprM         := SumExpr;
+    
+    
+    error        :=  |err,st,rest| ParseErrors::PairErr(st, Box::new(err),"sum", rest)
 }
 
 grammar_snippet! {
@@ -1401,7 +1408,7 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    NegExpr    := Minus.pair(Expr);
+    NegExpr    := Minus.pair(ExprM);
     production := |(name,x),_state| { let local = name.get_location();let args = vec![x];  Expression::call ( name, args, local )};
     error      := |err,st,rest| ParseErrors::PairErr(st,Box::new( err.fold(idt, idt)),"negation", rest)
 }
@@ -1417,12 +1424,12 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    BracketedExpr    := LParenToken.triple(SumExpr, RParenToken).second();
+    BracketedExpr    := LParenToken.triple(ExprM, RParenToken).second();
     error            := |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, idt, idt)),"bracketed", rest)
 }
 
 grammar_snippet! {
-    CallExpr    := VarOrConstExpr.pair(LParenToken.triple(Expr.separated_by(CommaToken), RParenToken));
+    CallExpr    := VarOrConstExpr.pair(LParenToken.triple(ExprM.separated_by(CommaToken), RParenToken));
     production := | (name,(_, (expr, vec), (_, local2))),_state|
     {
         let mut args = vec![expr];
@@ -1433,7 +1440,7 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    LazyCallExpr    := VarOrConstExpr.pair(LBracketToken.triple(Expr.separated_by(CommaToken), RBracketToken));
+    LazyCallExpr    := VarOrConstExpr.pair(LBracketToken.triple(ExprM.separated_by(CommaToken), RBracketToken));
     production := | (name,(_, (expr, vec), (_, local2))),_state|
     {
         let mut args = vec![expr];
@@ -1444,7 +1451,7 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    StructCallExpr    := VarOrConstExpr.pair(LBracetToken.triple(Expr.separated_by(CommaToken), RBracetToken));
+    StructCallExpr    := VarOrConstExpr.pair(LBracetToken.triple(ExprM.separated_by(CommaToken), RBracetToken));
     production := | (name,(_, (expr, vec), (_, local2))),_state|
     {
         let mut args = vec![expr];
