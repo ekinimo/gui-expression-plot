@@ -1167,7 +1167,7 @@ token_implementer!(
 );
 token_implementer!(
     VarToken,
-    |character: &char| character == &':',
+    |character: &char| character == &'\'',
     |character: &char| character.is_alphabetic() && character.is_ascii_lowercase(),
     |character: &char| character.is_alphabetic() || character.is_numeric() || character == &'_'
 );
