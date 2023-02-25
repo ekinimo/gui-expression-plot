@@ -1,6 +1,5 @@
 #![warn(clippy::pedantic)]
 #![allow(dead_code)]
-#![allow(clippy::suspicious)]
 #![feature(box_patterns)]
 #![feature(iter_intersperse)]
 use malachite::Integer;
@@ -50,7 +49,7 @@ impl Localization {
     }
 }
 
-#[derive(Clone, Debug,   Hash)]
+#[derive(Clone, Debug, Hash)]
 pub enum Expression {
     Number {
         value: malachite::Integer,
@@ -87,7 +86,7 @@ impl PartialEq for Expression {
     }
 }
 
-impl Eq for Expression{}
+impl Eq for Expression {}
 #[derive(Clone, Debug, PartialEq)]
 pub enum Definition {
     Atom {
@@ -446,19 +445,16 @@ impl Expression {
                         .iter()
                         .any(|(pat, _)| pat.get_struct_call_args().unwrap().len() == args.len())
                 {
-                    
-                    let iterator : Vec<Expression> = args.clone()
+                    let iterator: Vec<Expression> = args
+                        .clone()
                         .iter_mut()
                         .map(|x| x.eval(env))
                         .filter(Result::is_ok)
-                        .map(Result::unwrap).collect();
+                        .map(Result::unwrap)
+                        .collect();
 
                     if iterator.len() == args.len() {
-                        return Ok(Expression::struct_call(
-                            *n1.clone(),
-                            iterator,
-                            *local,
-                        ));
+                        return Ok(Expression::struct_call(*n1.clone(), iterator, *local));
                     }
                 }
 
@@ -932,7 +928,7 @@ impl Expression {
     }
 }
 
-use parser_combinator::either::Either;
+use parser_combinator::either::{Either, Either3};
 //Parsers
 use parser_combinator::parser::{match_anything, match_literal};
 use parser_combinator::{Parse, ParseResult};
@@ -940,6 +936,8 @@ use parser_combinator::{Parse, ParseResult};
 #[derive(Clone, Debug)]
 pub enum ParseErrors<'a> {
     GenericErr(Localization, &'static str, Chars<'a>),
+    EitherErr(Localization, Vec<ParseErrors<'a>>, &'static str, Chars<'a>),
+    PairErr(Localization, Box<ParseErrors<'a>>, &'static str, Chars<'a>),
     Empty,
 }
 
@@ -955,7 +953,7 @@ pub fn whitespace(
     state: Localization,
 ) -> ParseResult<Chars<'_>, Localization, char, ParseErrors> {
     let space = match_anything(|local: Localization| local.advance_by(0, 1)).validate(
-        |character: &char| character == &' ',
+        |character: &char| character == &' ' || character == &'\t',
         "alphabetic character".to_string(),
     );
     let newline = match_anything(|local: Localization| local.advance_by(1, 0)).validate(
@@ -1327,16 +1325,11 @@ pub fn build_left_assoc(
 }
 
 grammar_snippet! {
-    Toplevel   of Program      := Def.either(Expr).separated_by(SemiColonToken);
+    Toplevel   of Program      := Def.either(Expr).one_or_more();
     production := |x,_| {
         let mut exprs  = vec![];
         let mut defs  = vec![];
-
-        match x.0 {
-            Either::Left(def) => {defs.push(def)},
-            Either::Right(expr) => {exprs.push(expr)},
-        }
-        x.1.iter().for_each(|(_,a)|
+        x.iter().for_each(|a|
                             match a {
                                 Either::Left(def) => {defs.push(def.clone())},
                                 Either::Right(expr) => {exprs.push(expr.clone())},
@@ -1344,71 +1337,88 @@ grammar_snippet! {
         );
         Program::from_defs_and_exprs(defs, exprs)
     };
-    error      := |_err,_st,_rest|  ParseErrors::Empty
+    error      := |err,st,rest|  {
+        ParseErrors::EitherErr(st, vec![err.0,err.1], "top level ", rest)
+    }
 }
 
 grammar_snippet! {
-    Def of Definition    :=  (StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(VarExpr),EqualToken , Expr)
-        .transform_with_state(|x, local |Definition::from_expression(&x.0, &x.2, local))
+    Def of Definition    :=  (StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(VarExpr),EqualToken , Expr).pair(SemiColonToken)
+        .transform_with_state(|x, local |Definition::from_expression(&x.0.0, &x.0.2, local))
         .with_error_using_state(|_err,st,rest| ParseErrors::GenericErr(st, "definition", rest))
         .validate(Option::is_some, ParseErrors::Empty);
 
 
     production := |x,_local| x.unwrap();
 
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "definition", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st, Box::new(err),"definition", rest)
 }
 
 grammar_snippet! {
-    Expr         := SumExpr;
-    precondition := |mut input : Chars,_| input.any(|char| !char.is_whitespace());
-    error        :=  Err(ParseErrors::Empty)
+    Expr         := SumExpr.pair(SemiColonToken).first();
+      
+    //precondition := |mut input : Chars,_| input.any(|char| !char.is_whitespace());
+    error        :=  |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, idt)),"sum", rest)
 }
 
 grammar_snippet! {
     SumExpr    := Self.right_assoc(SubExpr, Plus);
     production := build_right_assoc;
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "sum", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, foldidt)),"sum", rest)
 }
 
 grammar_snippet! {
     SubExpr    := Self.right_assoc(MulExpr, Minus);
     production := build_right_assoc;
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "subtraction", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, foldidt)),"subtraction", rest)
 }
 
 grammar_snippet! {
     MulExpr    := Self.right_assoc(DivExpr, Star);
     production := build_right_assoc;
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "multiplication", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, foldidt)),"multiplication", rest)
 }
 
 grammar_snippet! {
     DivExpr    := Self.right_assoc(ExpExpr, Slash);
     production := build_right_assoc;
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "division", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st,Box::new(err.fold(idt, foldidt)) ,"division", rest)
 }
 
 grammar_snippet! {
+
     ExpExpr    := Self.left_assoc(Carrot, AtomicExpr.or_else(NegExpr));
     production := build_left_assoc;
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "exponentiation", rest)
+    error      := move |(err1,(err2,err3)),st,rest|
+    {
+           let e = match err1
+        {
+            Either3::Left((a,b)) => ParseErrors::EitherErr(st,vec![a,b] ,"exponentiation middle", rest.clone()),
+            Either3::Middle(x) | Either3::Right(x) => x,
+        };
+    ParseErrors::EitherErr(st,vec![e,err2,err3] ,"exponentiation", rest)
+    }
 }
 
 grammar_snippet! {
     NegExpr    := Minus.pair(Expr);
     production := |(name,x),_state| { let local = name.get_location();let args = vec![x];  Expression::call ( name, args, local )};
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "negation", rest)
+    error      := |err,st,rest| ParseErrors::PairErr(st,Box::new( err.fold(idt, idt)),"negation", rest)
 }
 
 grammar_snippet! {
-    AtomicExpr    := StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(NumExpr).or_else(VarOrConstExpr).or_else(BracketedExpr);
-    error         := |_err,st,rest| ParseErrors::GenericErr(st, "atom", rest)
+    AtomicExpr    := AllCallExprs.or_else(NumExpr).or_else(VarOrConstExpr).or_else(BracketedExpr);
+    error         := |(((e1,e2),e3),e4),st,rest| ParseErrors::EitherErr(st, vec![e1,e2,e3,e4], "struct or lazycall or call", rest)
 }
 
 grammar_snippet! {
-    BracketedExpr    := LParenToken.triple(Expr, RParenToken).second();
-    error            := |_err,st,rest| ParseErrors::GenericErr(st, "bracketed", rest)
+    AllCallExprs    := StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr);
+    error         := |((e1,e2),e3),st,rest| ParseErrors::EitherErr(st, vec![e1,e2,e3], "struct or lazycall or call", rest)
+}
+
+grammar_snippet! {
+    BracketedExpr    := LParenToken.triple(SumExpr, RParenToken).second();
+    error            := |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, idt, idt)),"bracketed", rest)
 }
 
 grammar_snippet! {
@@ -1457,7 +1467,7 @@ grammar_snippet! {
 
 grammar_snippet! {
     VarOrConstExpr := VarExpr.or_else(ConstExpr);
-    error      := |_err,st,rest| ParseErrors::GenericErr(st, "Variable", rest)
+    error      := |(err1,err2),st,rest| ParseErrors::EitherErr(st,vec![err1,err2] , "variable or constant", rest)
 }
 
 grammar_snippet! {
@@ -1502,6 +1512,12 @@ grammar_snippet! {
     error      := |_err,st,rest| ParseErrors::GenericErr(st, "primiive token", rest)
 }
 
+fn idt<T>(x: T) -> T {
+    x
+}
+fn foldidt<T>(x: Either<T,T>) -> T {
+    x.fold(idt, idt)
+}
 #[test]
 fn number_expr_should_suceed() {
     let a = "123    ".chars();
@@ -1535,18 +1551,22 @@ fn repl() {
         let mut buf = String::new();
 
         stdin.read_line(&mut buf).unwrap();
+        if buf.starts_with("!show mem") {
+            println!("\nmemory : \n {env:#?}");
+            continue;
+        }
         println!("\nParsing___________________________ ");
 
         println!("\nRead :");
         println!("         {buf}");
-        if let Ok(a) = Toplevel.parse(buf.chars(), Localization::default()) {
-            println!("\nLeft :");
-            println!("         {}", a.2.as_str());
+        match Toplevel.parse(buf.chars(), Localization::default()) {
+            Ok((a,_,rest))=>{println!("\nLeft :");
+                             println!("         {rest:?}") ;
             //println!("{:#?}",&a.0);
-            println!("{}", &a.0);
+            println!("{}", &a);
             //a.0.display_as_tree(2);
             println!("\nEvaluating________________________ ");
-            a.0.eval_with_env(&mut env)
+            a.eval_with_env(&mut env)
                 .iter()
                 .for_each(|result| match result {
                     Ok(x) => {
@@ -1556,9 +1576,16 @@ fn repl() {
                     }
                     Err(err) => {
                         //println!("\n   FAIL!. \n  {:4>#?}", err);
-                        println!("\n   FAIL!. \n  {err:?}");
+                        println!("\n   FAIL!. \n  {err:#?}");
                     }
                 });
+        }
+            Err(err) =>{
+                println!("\n   Error!. ");
+                //println!("{:4^-#?}",&x);
+                println!("    {err:#?}");
+            }
+
         }
         print!("___________________________________________________________________\n>> ");
         io::stdout().flush().unwrap();
