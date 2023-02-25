@@ -1343,7 +1343,7 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    Def of Definition    :=  (StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(VarExpr),EqualToken , Expr).pair(SemiColonToken)
+    Def of Definition    :=  (StructCallExpr.or_else(LazyCallExpr).or_else(CallExpr).or_else(VarExpr),EqualToken , ExprM).pair(SemiColonToken)
         .transform_with_state(|x, local |Definition::from_expression(&x.0.0, &x.0.2, local))
         .with_error_using_state(|_err,st,rest| ParseErrors::GenericErr(st, "definition", rest))
         .validate(Option::is_some, ParseErrors::Empty);
