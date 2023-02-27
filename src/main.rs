@@ -398,7 +398,11 @@ impl Expression {
                     for (head, body) in env.call_map.get(name).unwrap().iter() {
                         let mut bindings = HashMap::default();
                         if head.pattern_match(&new_expr, &mut bindings) {
-                            return body.replace_var(&bindings).eval(env);
+                            let ret = body.replace_var(&bindings).eval(env);
+                            if ret.is_ok(){
+                                env.memory.insert(self.clone(), ret.clone().unwrap());
+                            }
+                            return ret;
                         }
                     }
                     return Err(EvalError::GenericErr(
@@ -420,7 +424,9 @@ impl Expression {
                         let mut bindings = HashMap::default();
 
                         if head.pattern_match(expr, &mut bindings) {
-                            return Ok(body.replace_var(&bindings));
+                            let ret = body.replace_var(&bindings);
+                            env.memory.insert(self.clone(), ret.clone());
+                            return Ok(ret);
                         }
                     }
                     return Err(EvalError::GenericErr(
@@ -454,7 +460,9 @@ impl Expression {
                         .collect();
 
                     if iterator.len() == args.len() {
-                        return Ok(Expression::struct_call(*n1.clone(), iterator, *local));
+                        let ret = Expression::struct_call(*n1.clone(), iterator, *local);
+                        env.memory.insert(self.clone(), ret.clone());
+                        return Ok(ret);
                     }
                 }
 
