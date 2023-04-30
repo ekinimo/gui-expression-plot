@@ -891,7 +891,7 @@ impl Expression {
                     local: _,
                 },
             ) => {
-                
+                println!("DBG   {n1}{n2}");
                 if a1.len() != a2.len() {
                     return false;
                 }
@@ -900,7 +900,14 @@ impl Expression {
                         return false;
                     }
                 }
+                if bindings.contains_key(n1.to_string().as_str()){
+
+                    println!("Hellooooooo");
+                    return **n2 == *bindings.get(n1.to_string().as_str()).unwrap();
+                }
                 bindings.insert(n1.to_string(), *n2.clone());
+                //println!("DBG   {:?}",bindings);
+
                 true
             }
 
@@ -1464,7 +1471,7 @@ pub fn build_left_assoc(
 }
 
 grammar_snippet! {
-    Toplevel   of Program      := Def.either(Expr).either((match_character('/'),match_character('/'),match_while(|x| x!=&'\n', |_,x| Localization::advance_by(&x, 0, 1)))).one_or_more();
+    Toplevel   of Program      := Def.either(Expr).either((match_character('/'),match_character('/'),match_while(|x| x!=&'\n', |_,x| Localization::advance_by(&x, 0, 1))).skip(whitespace)).one_or_more();
     production := |x,_| {
         let mut exprs  = vec![];
         let mut defs  = vec![];
@@ -1786,17 +1793,21 @@ fn repl() {
                 println!("{}", &a);
                 //a.0.display_as_tree(2);
                 println!("\nEvaluating________________________ ");
+                let start = SystemTime::now();
                 a.eval_with_env(&mut env)
                     .iter()
                     .for_each(|result| match result {
                         Ok(x) => {
-                            println!("\n   SUCCESS!. ");
+                            let end = SystemTime::now();
+                            println!("\n   SUCCESS!. took {}",end.duration_since(start).unwrap().as_secs_f64());
                             //println!("{:4^-#?}",&x);
                             println!("    {x}");
                         }
                         Err(err) => {
                             //println!("\n   FAIL!. \n  {:4>#?}", err);
-                            println!("\n   FAIL!. \n  {err:#?}");
+                            let end = SystemTime::now();
+                            
+                            println!("\n   FAIL!. \n  {err:#?} {} ",end.duration_since(start).unwrap().as_secs_f64());
                         }
                     });
             }

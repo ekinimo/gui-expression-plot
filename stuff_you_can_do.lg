@@ -1,4 +1,4 @@
-/// BASIC OPERATIONS 
+/// THIS LANGUAGE ONLY SUPPORTS INTEGERS. Here are the BUILTIN OPERATIONS 
 
  1 + 2 ;
  3 - 4 ;
@@ -29,21 +29,19 @@ ceil_root(2000,12);
 square(56);
 bnot(1);
 
-///  Functions
+///  Functions 
 
-fact(0) = 1;
-fact(_n) = _n * fact(_n -1);
-
+fact(0) = 1; 
+fact(_n) = _n * fact(_n -1); //Note that variables start with `_`  . `x` is a constant `_x` is a variable
 fact(100);
 
-//Patterns are non linear
 
-equality(_x,_x) = _x;
 
+equality(_x,_x) = dogru; //Patterns are non linear
 equality(5,5);
+equality(1,2); //FAILS
 
-//FAILS
-equality(1,2);
+// Function Patterns may include constants,structs,integers and variables
 
 //// STRUCTURES. note that right hand side of struct definition is semantically meaningless; left hand side codifies the existence of structs via patterns
 
@@ -62,8 +60,10 @@ magnitude(complex{_x, _y}) = floor_sqrt(_x*_x + _y*_y);
 lcm(_x,_y) = _x*_y / gcd(_x,_y);
 
 rat{_x,_y} = 1;
-+(rat{_x,_y},rat{_z,_w}) = rat{_w*_x+_y*_z,_y*_w};
--(rat{_x,_y},rat{_z,_w}) = rat{_w*_x-_y*_z,_y*_w};
++(rat{_x,_y},rat{_z,_w}) = rat{ _w * _x + _y *_z,
+                                _y * _w};
+-(rat{_x,_y},rat{_z,_w}) = rat{ _w*_x - _y*_z,
+                                _y * _w};
 *(rat{_x,_y},rat{_z,_w}) = rat{_x*_z , _w*_y};
 
 
@@ -90,6 +90,7 @@ first(complex{3,10});
 
 
 nil{_x} = 1 ;
+
 linked{_x,nil{_y}} = 1 ;
 linked{_x,linked{_y,_z}} = 1;
 
@@ -106,14 +107,24 @@ push(_n) = nil{_n};
 //Function and struct patterns can only refer to structs/variables/constants/integers
 
 push(linked{1,linked{2,linked{3,nil{4}}}},3);
+
 push(push(push(1),2),3);
 
+
+sum(nil{_n}) = 0;
+sum( linked{_x, nil{_n}}) = _x;
+sum(linked{_x, linked{_y, _ys}}) = x +  sum(linked{ _y, _ys});
+
+sum_upto(0) = 0;
+sum_upto(_x) = _x + sum_upto(_x-1);
 
 
 // define a function to calculate the sum of a sequence of rational numbers
 sum_rat(nil{_n}) = 0;
-sum_rat(linked{rat{_x, _y}, nil{_n}}) = rat{_x, _y};
-sum_rat(linked{rat{_x, _y}, linked{_xs, _ys}}) = rat{_x, _y}+sum_rat(linked{ _xs, _ys});
+sum_rat( linked{rat{_x, _y}, nil{_n}}) = rat{_x, _y};
+
+sum_rat(linked{rat{_x, _y}, linked{_xs, _ys}}) = rat{_x, _y} +
+                                                 sum_rat(linked{ _xs, _ys});
 
 // define a linked list of rational numbers
 linked{rat{1, 2}, linked{rat{3, 4}, linked{rat{5, 6}, nil{0}}}};
@@ -129,5 +140,26 @@ f[_x] = _x;
 f[1+2+3+4+5+6+7+8];
 
 
+lr{_rat{_x,_y},_rat} = 1 ;
+lr{_rat{_x,_y},lr{_rat{_w1,_w2},_z}} = 1;
+
+lr{rat{0,1},
+       rat};
 
 
+
+lr{complex{0,1},
+    lr{complex{0,1},
+       complex}};
+
+lr{rat{0,1},
+    lr{rat{0,1},
+       rat}};
+
+
+lr{complex{0,1},
+       complex};
+
+lr{complex{1,1},lr{rat{0,1},
+    lr{rat{0,1},
+       rat}}};
