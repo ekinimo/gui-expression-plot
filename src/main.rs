@@ -2,12 +2,18 @@
 #![allow(dead_code)]
 #![feature(box_patterns)]
 #![feature(iter_intersperse)]
+use malachite::num::arithmetic::traits::{
+    Abs, BinomialCoefficient, CeilingRoot, CeilingSqrt, DivisibleBy, ExtendedGcd, FloorRoot,
+    FloorSqrt, JacobiSymbol, KroneckerSymbol, LegendreSymbol, Pow, Square,
+};
 use malachite::Integer;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+use std::ops::{Neg, Not};
 use std::str::Chars;
 use std::str::FromStr;
-use std::usize;
+use std::time::SystemTime;
+use std::{fs, usize};
 
 use druid::widget::Label;
 use druid::{AppLauncher, Widget, WindowDesc};
@@ -309,7 +315,7 @@ impl Definition {
                 .get_call_args()
                 .unwrap()
                 .into_iter()
-                .all(|x| x.is_number() || x.is_variable() || x.is_struct_call())
+                .all(|x| x.is_number() || x.is_variable() || x.is_struct_call() || x.is_constant())
         })
     }
 
@@ -331,13 +337,28 @@ impl Definition {
                 .get_struct_call_args()
                 .unwrap()
                 .into_iter()
-                .all(|x| x.is_number() || x.is_variable() || x.is_struct_call())
+                .all(|x| x.is_number() || x.is_variable() || x.is_struct_call() || x.is_constant())
         })
     }
 }
 
 impl Expression {
-    fn eval_primitive(name: &str, args: &Vec<Expression>) -> impl Fn(Integer, Integer) -> Integer {
+    fn eval_primitive_unary(name: &str, args: &Vec<Expression>) -> impl Fn(Integer) -> Integer {
+        match (name, args.len()) {
+            ("ceil_sqrt", 1) => |x: Integer| x.ceiling_sqrt(),
+            ("floor_sqrt", 1) => |x: Integer| x.floor_sqrt(),
+            ("abs", 1) => |x: Integer| x.abs(),
+            ("square", 1) => |x: Integer| x.square(),
+            ("bnot", 1) => |x: Integer| x.not(),
+            ("-", 1) => |x: Integer| x.neg(),
+
+            _ => panic!("this shouldnt happen"),
+        }
+    }
+    fn eval_primitive_binary(
+        name: &str,
+        args: &Vec<Expression>,
+    ) -> impl Fn(Integer, Integer) -> Integer {
         match (name, args.len()) {
             ("+", 2) => |x, y| x + y,
             ("-", 2) => |x, y| x - y,
@@ -349,18 +370,68 @@ impl Expression {
             ("band", 2) => |x, y| x & (y),
             ("bor", 2) => |x, y| x | (y),
             ("bxor", 2) => |x, y| x ^ (y),
+            ("gcd", 2) => |x: Integer, y| Integer::from(x.extended_gcd(y).0),
+            ("extended_gcd_x", 2) => |x: Integer, y| x.extended_gcd(y).1,
+            ("extended_gcd_y", 2) => |x: Integer, y| x.extended_gcd(y).2,
+            ("binomial", 2) => |x: Integer, y| Integer::binomial_coefficient(x, y),
+            ("divisible_by", 2) => |x: Integer, y| Integer::from(x.divisible_by(y)),
+            ("jacobi_symbol", 2) => |x: Integer, y| Integer::from(x.jacobi_symbol(y)),
+            ("kroenekecker_symbol", 2) => |x: Integer, y| Integer::from(x.kronecker_symbol(y)),
+            ("legendre_symbol", 2) => |x: Integer, y| Integer::from(x.legendre_symbol(&y)),
 
+            _ => panic!("this shouldnt happen"),
+        }
+    }
+    fn eval_primitive_binary_failable(
+        name: &str,
+        args: &Vec<Expression>,
+    ) -> impl Fn(Integer, Integer) -> Option<Integer> {
+        match (name, args.len()) {
+            ("^", 2) => |x: Integer, y: Integer| match y.to_string().parse::<u64>() {
+                Ok(c) => Some(x.pow(c)),
+                Err(_) => None,
+            },
+            ("ceil_root", 2) => |x: Integer, y: Integer| match y.to_string().parse::<u64>() {
+                Ok(c) => Some(x.ceiling_root(c)),
+                Err(_) => None,
+            },
+            ("floor_root", 2) => |x: Integer, y: Integer| match y.to_string().parse::<u64>() {
+                Ok(c) => Some(x.floor_root(c)),
+                Err(_) => None,
+            },
             _ => panic!("this shouldnt happen"),
         }
     }
 
     fn eval(&self, env: &mut Env) -> Result<Self, EvalError> {
-        let map: HashSet<&str> = HashSet::from([
-            "+", "-", "/", "*", "mod", "max", "min", "band", "bor", "bxor",
+        let map_binary: HashSet<&str> = HashSet::from([
+            "+",
+            "-",
+            "/",
+            "*",
+            "mod",
+            "max",
+            "min",
+            "band",
+            "bor",
+            "bxor",
+            "gcd",
+            "extended_gcd_x",
+            "extended_gcd_y",
+            "binomial",
+            "divisible_by",
+            "jacobi_symbol",
+            "kroenekecker_symbol",
+            "legendre_symbol",
         ]);
 
+        let map_unary: HashSet<&str> =
+            HashSet::from(["ceil_sqrt", "floor_sqrt", "abs", "square", "bnot", "-"]);
+
+        let map_failable: HashSet<&str> = HashSet::from(["ceil_root", "floor_root", "^"]);
+
         if env.memory.contains_key(self) {
-            //println!("Cache hit!");
+            println!("Cache hit!");
             return Ok(env.memory.get(self).unwrap().clone());
         }
         let ret = match self {
@@ -372,19 +443,47 @@ impl Expression {
                 local,
             } => {
                 let name = &n_expr.get_const_or_var_name().unwrap();
-                if env.call_map.contains_key(name) || map.contains(&name.as_str()) {
+                if env.call_map.contains_key(name)
+                    || map_unary.contains(&name.as_str())
+                    || map_binary.contains(&name.as_str())
+                    || map_failable.contains(&name.as_str())
+                {
                     let mut new_args = Vec::new();
                     new_args.reserve(args.len());
                     for arg in args {
                         new_args.push(arg.eval(env)?);
                     }
-                    if map.contains(&name.as_str())
+                    if map_binary.contains(&name.as_str())
                         && new_args.len() == 2
                         && new_args.iter().all(Expression::is_number)
                     {
                         let a = new_args.get(0).unwrap().get_int_val().unwrap();
                         let b = new_args.get(1).unwrap().get_int_val().unwrap();
-                        let c = Self::eval_primitive(name.as_str(), &new_args)(a, b);
+                        let c = Self::eval_primitive_binary(name.as_str(), &new_args)(a, b);
+                        return Ok(Expression::number(c, *local));
+                    }
+                    if map_failable.contains(&name.as_str())
+                        && new_args.len() == 2
+                        && new_args.iter().all(Expression::is_number)
+                    {
+                        let a = new_args.get(0).unwrap().get_int_val().unwrap();
+                        let b = new_args.get(1).unwrap().get_int_val().unwrap();
+                        let c =
+                            Self::eval_primitive_binary_failable(name.as_str(), &new_args)(a, b);
+                        return match c {
+                            Some(n) => Ok(Expression::number(n, *local)),
+                            None => Err(EvalError::GenericErr(
+                                *local,
+                                "Call <{name}> is not defined",
+                            )),
+                        };
+                    }
+                    if map_unary.contains(&name.as_str())
+                        && new_args.len() == 1
+                        && new_args.iter().all(Expression::is_number)
+                    {
+                        let a = new_args.get(0).unwrap().get_int_val().unwrap();
+                        let c = Self::eval_primitive_unary(name.as_str(), &new_args)(a);
                         return Ok(Expression::number(c, *local));
                     }
                     if !env.call_map.contains_key(name) {
@@ -399,7 +498,7 @@ impl Expression {
                         let mut bindings = HashMap::default();
                         if head.pattern_match(&new_expr, &mut bindings) {
                             let ret = body.replace_var(&bindings).eval(env);
-                            if ret.is_ok(){
+                            if ret.is_ok() {
                                 env.memory.insert(self.clone(), ret.clone().unwrap());
                             }
                             return ret;
@@ -407,7 +506,7 @@ impl Expression {
                     }
                     return Err(EvalError::GenericErr(
                         *local,
-                        "Call  did not match any of the patterns",
+                        "Call  did not match any of the patterns", //,name
                     ));
                 }
                 return Err(EvalError::GenericErr(
@@ -425,8 +524,8 @@ impl Expression {
 
                         if head.pattern_match(expr, &mut bindings) {
                             let ret = body.replace_var(&bindings);
-                            env.memory.insert(self.clone(), ret.clone());
-                            return Ok(ret);
+                            //env.memory.insert(self.clone(), ret.clone());
+                            return ret.eval(env);
                         }
                     }
                     return Err(EvalError::GenericErr(
@@ -436,40 +535,58 @@ impl Expression {
                 }
                 return Err(EvalError::GenericErr(*local, "Lazy Call is not defined"));
             }
-            Expression::StructCall {
+            expr @ Expression::StructCall {
                 name: n1,
                 local,
                 args,
             } => {
+                /*let name = &n1.get_const_or_var_name().unwrap();
+                if env.struct_map.contains_key(name) {
+                    for (head, body) in env.struct_map.get(name).unwrap().iter() {
+                        let mut bindings = HashMap::default();
+
+                        if head.pattern_match(expr, &mut bindings) {
+                            //let ret = body.replace_var(&bindings);
+                            //env.memory.insert(self.clone(), ret.clone());
+                            return Ok(expr.clone());
+                        }
+                    }
+                    return Err(EvalError::GenericErr(
+                        *local,
+                        "Pattern Call did not match any of the patterns",
+                    ));
+                }
+                return Err(EvalError::GenericErr(*local, "Pattern Call is not defined"));*/
                 let name = &n1.get_const_or_var_name().unwrap();
+                print!("DBG   !!   {}",&name);
+                let mut new_args = Vec::new();
+                new_args.reserve(args.len());
+                for arg in args {
+                    new_args.push(arg.eval(env)?);
+                }
+                if !env.struct_map.contains_key(name) {
+                    println!(" {} doesnt exist!!!", &name);
+                    return Err(EvalError::GenericErr(
+                        *local,
+                        "struct <{name}> is not defined",
+                    ));
+                }
+                let new_expr = Expression::struct_call(*n1.clone(), new_args, *local);
 
-                if env.struct_map.contains_key(name)
-                    && env
-                        .struct_map
-                        .get(name)
-                        .unwrap()
-                        .iter()
-                        .any(|(pat, _)| pat.get_struct_call_args().unwrap().len() == args.len())
-                {
-                    let iterator: Vec<Expression> = args
-                        .clone()
-                        .iter_mut()
-                        .map(|x| x.eval(env))
-                        .filter(Result::is_ok)
-                        .map(Result::unwrap)
-                        .collect();
+                for (head, _) in env.struct_map.get(name).unwrap().iter() {
+                    let mut bindings = HashMap::default();
+                    if head.pattern_match(&new_expr, &mut bindings) {
+                        //let ret = body.replace_var(&bindings).eval(env);
 
-                    if iterator.len() == args.len() {
-                        let ret = Expression::struct_call(*n1.clone(), iterator, *local);
-                        env.memory.insert(self.clone(), ret.clone());
-                        return Ok(ret);
+                        return Ok(new_expr);
                     }
                 }
-
-                {
-                    return Err(EvalError::GenericErr(*local, "Struct is not defined"));
-                }
+                return Err(EvalError::GenericErr(
+                    *local,
+                    "Call  did not match any of the patterns", //,name
+                ));
             }
+
             expr @ Expression::Variable { name, .. } => {
                 if env.const_map.contains_key(name) {
                     Ok(env.const_map.get(name).unwrap().clone())
@@ -478,7 +595,7 @@ impl Expression {
                 }
             }
         };
-        env.memory.insert(self.clone(), ret.clone().unwrap());
+        //env.memory.insert(self.clone(), ret.clone().unwrap());
         ret
     }
 
@@ -603,6 +720,9 @@ impl Expression {
             (Expression::Number { value: v1, .. }, Expression::Number { value: v2, .. }) => {
                 v1 == v2
             }
+            (Expression::Constant { name: v1, .. }, Expression::Constant { name: v2, .. }) => {
+                v1 == v2
+            }
             (
                 Expression::Call {
                     name: n1, args: a1, ..
@@ -635,6 +755,7 @@ impl Expression {
     }
 
     fn pattern_match(&self, other: &Self, bindings: &mut HashMap<String, Expression>) -> bool {
+        
         match (self, other) {
             (
                 Expression::Number {
@@ -645,7 +766,12 @@ impl Expression {
                     value: v2,
                     local: _,
                 },
-            ) => v1 == v2,
+            )  => {v1 == v2},
+            (
+                Expression::Constant { name: v1, local: _ },
+                Expression::Constant { name: v2, local: _ },
+            ) => {v1 == v2},
+
             (
                 Expression::Call {
                     name: box Expression::Constant { name: n1, .. },
@@ -682,6 +808,7 @@ impl Expression {
                     local: _,
                 },
             ) => {
+                
                 if n1 != n2 || a1.len() != a2.len() {
                     return false;
                 }
@@ -764,6 +891,7 @@ impl Expression {
                     local: _,
                 },
             ) => {
+                
                 if a1.len() != a2.len() {
                     return false;
                 }
@@ -780,6 +908,7 @@ impl Expression {
                 e1 @ Expression::Variable { name: n2, local: _ },
                 e2 @ Expression::Variable { name: n1, local: _ },
             ) => {
+                
                 if n1 == n2 {
                     return true;
                 }
@@ -802,6 +931,7 @@ impl Expression {
                 true
             }
             (Expression::Variable { name, local: _ }, expr) => {
+                
                 if bindings.contains_key(name) {
                     return expr.equal(bindings.get(name).unwrap());
                 }
@@ -873,7 +1003,7 @@ impl Expression {
     }
 
     fn constant(name: impl Into<String>, local: Localization) -> Self {
-        Self::Variable {
+        Self::Constant {
             name: name.into(),
             local,
         }
@@ -938,7 +1068,7 @@ impl Expression {
 
 use parser_combinator::either::{Either, Either3};
 //Parsers
-use parser_combinator::parser::{match_anything, match_literal};
+use parser_combinator::parser::{match_anything, match_literal, match_character, match_while};
 use parser_combinator::{Parse, ParseResult};
 
 #[derive(Clone, Debug)]
@@ -964,7 +1094,8 @@ pub fn whitespace(
         |character: &char| character == &' ' || character == &'\t',
         "alphabetic character".to_string(),
     );
-    let newline = match_anything(|local: Localization| local.advance_by(1, 0)).validate(
+    let newline = match_anything(|local: Localization|
+                                 {let mut l = local.advance_by(1, 0); l.end_col=0;l}).validate(
         |character: &char| character == &'\n',
         "alphabetic character".to_string(),
     );
@@ -1175,7 +1306,7 @@ token_implementer!(
 );
 token_implementer!(
     VarToken,
-    |character: &char| character == &'\'',
+    |character: &char| character == &'_',
     |character: &char| character.is_alphabetic() && character.is_ascii_lowercase(),
     |character: &char| character.is_alphabetic() || character.is_numeric() || character == &'_'
 );
@@ -1333,20 +1464,21 @@ pub fn build_left_assoc(
 }
 
 grammar_snippet! {
-    Toplevel   of Program      := Def.either(Expr).one_or_more();
+    Toplevel   of Program      := Def.either(Expr).either((match_character('/'),match_character('/'),match_while(|x| x!=&'\n', |_,x| Localization::advance_by(&x, 0, 1)))).one_or_more();
     production := |x,_| {
         let mut exprs  = vec![];
         let mut defs  = vec![];
         x.iter().for_each(|a|
                             match a {
-                                Either::Left(def) => {defs.push(def.clone())},
-                                Either::Right(expr) => {exprs.push(expr.clone())},
+                                Either::Left(Either::Left(def)) => {defs.push(def.clone())},
+                                Either::Left(Either::Right(expr)) => {exprs.push(expr.clone())},
+                                _ => (),
                             }
         );
         Program::from_defs_and_exprs(defs, exprs)
     };
     error      := |err,st,rest|  {
-        ParseErrors::EitherErr(st, vec![err.0,err.1], "top level ", rest)
+        ParseErrors::EitherErr(st, vec![err.0.0,err.0.1], "top level ", rest)
     }
 }
 
@@ -1364,15 +1496,15 @@ grammar_snippet! {
 
 grammar_snippet! {
     Expr         := ExprM.pair(SemiColonToken).first();
-      
+
     //precondition := |mut input : Chars,_| input.any(|char| !char.is_whitespace());
     error        :=  |err,st,rest| ParseErrors::PairErr(st, Box::new(err.fold(idt, idt)),"sum", rest)
 }
 
 grammar_snippet! {
     ExprM         := SumExpr;
-    
-    
+
+
     error        :=  |err,st,rest| ParseErrors::PairErr(st, Box::new(err),"sum", rest)
 }
 
@@ -1437,7 +1569,13 @@ grammar_snippet! {
 }
 
 grammar_snippet! {
-    CallExpr    := VarOrConstExpr.pair(LParenToken.triple(ExprM.separated_by(CommaToken), RParenToken));
+    CallExpr    := (VarOrConstExpr
+                    .or_else(Plus)
+                    .or_else(Minus)
+                    .or_else(Star)
+                    .or_else(Slash)
+                    .or_else(Carrot))
+        .pair(LParenToken.triple(ExprM.separated_by(CommaToken), RParenToken));
     production := | (name,(_, (expr, vec), (_, local2))),_state|
     {
         let mut args = vec![expr];
@@ -1493,7 +1631,7 @@ grammar_snippet! {
 
 grammar_snippet! {
     ConstExpr := LowerCaseToken;
-    production := |(name, local), state| Expression::variable(name, local.combine_last(&state));
+    production := |(name, local), state| Expression::constant(name, local.combine_last(&state));
     error      := |_err,st,rest| ParseErrors::GenericErr(st, "Variable", rest)
 }
 
@@ -1530,7 +1668,7 @@ grammar_snippet! {
 fn idt<T>(x: T) -> T {
     x
 }
-fn foldidt<T>(x: Either<T,T>) -> T {
+fn foldidt<T>(x: Either<T, T>) -> T {
     x.fold(idt, idt)
 }
 #[test]
@@ -1543,7 +1681,7 @@ fn number_expr_should_suceed() {
 
 #[test]
 fn var_expr_should_suceed() {
-    let a = "xey    ".chars();
+    let a = "'xey    ".chars();
     let res = SumExpr.parse(a, Localization::default()).unwrap();
     println!("{:?}", res);
     assert!(false)
@@ -1555,6 +1693,72 @@ fn sum_expr_should_suceed() {
     let res = SumExpr.parse(a, Localization::default()).unwrap();
     println!("{:?}", res);
     assert!(false)
+}
+
+fn eval_file(filepath: &str) -> () {
+    let data = fs::read_to_string(filepath);
+    let mut env = Env::default();
+
+    match data {
+        Ok(data) => {
+            let parse_start = SystemTime::now();
+            match Toplevel.parse(data.chars(), Localization::default()) {
+                Ok((a, _, rest)) => {
+                    let parse_end = SystemTime::now();
+                    println!(
+                        "\nTook : {}",
+                        parse_end.duration_since(parse_start).unwrap().as_micros()
+                    );
+                    println!("\nLeft :");
+                    println!("         {rest:?}");
+                    //println!("{:#?}",&a.0);
+                    println!("{}", &a);
+                    //a.0.display_as_tree(2);
+                    println!("\nEvaluating________________________ ");
+                    let eval_start = SystemTime::now();
+                    a.eval_with_env(&mut env)
+                        .iter()
+                        .for_each(|result| match result {
+                            Ok(x) => {
+                                println!("\n   SUCCESS!. ");
+                                //println!("{:4^-#?}",&x);
+                                println!("    {x}");
+                            }
+                            Err(err) => {
+                                //println!("\n   FAIL!. \n  {:4>#?}", err);
+                                println!("\n   FAIL!. \n  {err:#?}");
+                            }
+                        });
+                    let eval_end = SystemTime::now();
+                    println!(
+                        "\nTook : {}\n\n",
+                        eval_end.duration_since(eval_start).unwrap().as_micros()
+                    );
+
+                    println!(
+                        "\nParse      Took : {}",
+                        parse_end.duration_since(parse_start).unwrap().as_micros()
+                    );
+                    println!(
+                        "\nEval       Took : {}",
+                        eval_end.duration_since(eval_start).unwrap().as_micros()
+                    );
+                    println!(
+                        "\nParseEval  Took : {}",
+                        eval_end.duration_since(parse_start).unwrap().as_micros()
+                    );
+                }
+                Err(err) => {
+                    println!("\n   Error!. ");
+                    //println!("{:4^-#?}",&x);
+                    println!("    {err:#?}");
+                }
+            }
+            print!("___________________________________________________________________\n>> ");
+            return;
+        }
+        Err(_) => return,
+    }
 }
 
 fn repl() {
@@ -1575,39 +1779,40 @@ fn repl() {
         println!("\nRead :");
         println!("         {buf}");
         match Toplevel.parse(buf.chars(), Localization::default()) {
-            Ok((a,_,rest))=>{println!("\nLeft :");
-                             println!("         {rest:?}") ;
-            //println!("{:#?}",&a.0);
-            println!("{}", &a);
-            //a.0.display_as_tree(2);
-            println!("\nEvaluating________________________ ");
-            a.eval_with_env(&mut env)
-                .iter()
-                .for_each(|result| match result {
-                    Ok(x) => {
-                        println!("\n   SUCCESS!. ");
-                        //println!("{:4^-#?}",&x);
-                        println!("    {x}");
-                    }
-                    Err(err) => {
-                        //println!("\n   FAIL!. \n  {:4>#?}", err);
-                        println!("\n   FAIL!. \n  {err:#?}");
-                    }
-                });
-        }
-            Err(err) =>{
+            Ok((a, _, rest)) => {
+                println!("\nLeft :");
+                println!("         {rest:?}");
+                //println!("{:#?}",&a.0);
+                println!("{}", &a);
+                //a.0.display_as_tree(2);
+                println!("\nEvaluating________________________ ");
+                a.eval_with_env(&mut env)
+                    .iter()
+                    .for_each(|result| match result {
+                        Ok(x) => {
+                            println!("\n   SUCCESS!. ");
+                            //println!("{:4^-#?}",&x);
+                            println!("    {x}");
+                        }
+                        Err(err) => {
+                            //println!("\n   FAIL!. \n  {:4>#?}", err);
+                            println!("\n   FAIL!. \n  {err:#?}");
+                        }
+                    });
+            }
+            Err(err) => {
                 println!("\n   Error!. ");
                 //println!("{:4^-#?}",&x);
                 println!("    {err:#?}");
             }
-
         }
         print!("___________________________________________________________________\n>> ");
         io::stdout().flush().unwrap();
     }
 }
 fn main() {
-    repl();
+    //repl();
+    eval_file("./stuff_you_can_do.lg");
 }
 
 fn main10() {
@@ -1656,7 +1861,19 @@ impl Display for Expression {
         match self {
             Expression::Number { value, .. } => write!(f, " {value} "),
             Expression::Call { name, args, .. } => {
-                fun(&name.get_const_or_var_name().unwrap(), args, "(", ")")
+                let n = name.get_const_or_var_name().unwrap();
+                let special_names = HashSet::from(["+", "-", "*", "/", "^" ]);
+                if special_names.contains(n.as_str()){
+                    if args.len() == 1 {
+                        write!(f,"({}{n})",args[0])
+                    }
+                    else if args.len() == 2 {
+                        write!(f,"({}){n}({})",args[0],args[1])
+                    }
+                    else{ write!(f,"this should never happen")}
+                }else{
+                    fun(&n, args, "(", ")")
+                }
             }
             Expression::LazyCall { name, args, .. } => {
                 fun(&name.get_const_or_var_name().unwrap(), args, "[", "]")

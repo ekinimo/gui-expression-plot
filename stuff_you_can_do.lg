@@ -1,0 +1,133 @@
+/// BASIC OPERATIONS 
+
+ 1 + 2 ;
+ 3 - 4 ;
+ 5 * 6 ;
+ 6 / 3 ;
+ mod(5,2);
+ max(1,2);
+ min(1,2);
+ band(7,8);
+ bor(7,8);
+ bxor(7,8);
+ gcd(34,56);
+ extended_gcd_x(34,56);
+ extended_gcd_y(34,56);
+ binomial(3,2);
+ divisible_by(16,8);
+
+// jacobi_symbol(2,8);
+// legendre_symbol(2,8);
+// kroenecker_symbol(2,1);
+
+ceil_root(2000,12);
+ floor_root(2000,12);
+ ceil_sqrt(2000);
+ floor_sqrt(2000);
+ -10;
+ abs(-1);
+square(56);
+bnot(1);
+
+///  Functions
+
+fact(0) = 1;
+fact(_n) = _n * fact(_n -1);
+
+fact(100);
+
+//Patterns are non linear
+
+equality(_x,_x) = _x;
+
+equality(5,5);
+
+//FAILS
+equality(1,2);
+
+//// STRUCTURES. note that right hand side of struct definition is semantically meaningless; left hand side codifies the existence of structs via patterns
+
+
+complex{_x,_y} = 1;
+
+
++(complex{_x,_y},complex{_z,_w}) = complex{_x+_z,_y+_w};
+-(complex{_x,_y},complex{_z,_w}) = complex{_x-_z,_y-_w};
+*(complex{_x,_y},complex{_z,_w}) = complex{_x*_z-_y*_w,_y*_z+_x*_w};
+
+complex(_x,_y) = complex{_x,_y};
+magnitude(complex{_x, _y}) = floor_sqrt(_x*_x + _y*_y);
+
+
+lcm(_x,_y) = _x*_y / gcd(_x,_y);
+
+rat{_x,_y} = 1;
++(rat{_x,_y},rat{_z,_w}) = rat{_w*_x+_y*_z,_y*_w};
+-(rat{_x,_y},rat{_z,_w}) = rat{_w*_x-_y*_z,_y*_w};
+*(rat{_x,_y},rat{_z,_w}) = rat{_x*_z , _w*_y};
+
+
+
+//matching generic structs
+first( _pair{_a,_b} ) = _a;
+second( _pair{_a,_b} ) = _b;
+
+complex{0,1} * complex{0,1} ;
+complex{0,1} + complex{0,1} ;
+
+complex{3,10} * complex{5,10} ;
+complex{4,1} + complex{2,12} ;
+
+
+
+rat{3,10} * rat{4,10} ;
+rat{3,10} + rat{4,10} ;
+
+first(rat{3,10});
+first(complex{3,10});
+
+// STRUCT PATTERN DEFINITIONS, you can encode structures with patterns
+
+
+nil{_x} = 1 ;
+linked{_x,nil{_y}} = 1 ;
+linked{_x,linked{_y,_z}} = 1;
+
+ linked{1,linked{2,linked{3,nil{4}}}};
+
+//FAILS Because all existing two element linked structs must end with nil/linked 
+linked{1,linked{2,linked{3,4}}};
+
+
+push(linked{_a,_b},_c) = linked{_c,linked{_a,_b}};
+push(nil{_n},_x) = linked{_x,nil{_n}};
+push(_n) = nil{_n};
+
+//Function and struct patterns can only refer to structs/variables/constants/integers
+
+push(linked{1,linked{2,linked{3,nil{4}}}},3);
+push(push(push(1),2),3);
+
+
+
+// define a function to calculate the sum of a sequence of rational numbers
+sum_rat(nil{_n}) = 0;
+sum_rat(linked{rat{_x, _y}, nil{_n}}) = rat{_x, _y};
+sum_rat(linked{rat{_x, _y}, linked{_xs, _ys}}) = rat{_x, _y}+sum_rat(linked{ _xs, _ys});
+
+// define a linked list of rational numbers
+linked{rat{1, 2}, linked{rat{3, 4}, linked{rat{5, 6}, nil{0}}}};
+
+// calculate the sum of the linked list of rational numbers
+sum_rat(linked{rat{1, 2}, linked{rat{3, 4}, linked{rat{5, 6}, nil{_n}}}});
+
+// Lazy calls (or macros) can pattern match everything
+
+f[_x + _y] = f[_x] - f[_y] ;
+f[_x] = _x;
+
+f[1+2+3+4+5+6+7+8];
+
+
+
+
