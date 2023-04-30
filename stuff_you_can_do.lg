@@ -132,6 +132,51 @@ linked{rat{1, 2}, linked{rat{3, 4}, linked{rat{5, 6}, nil{0}}}};
 // calculate the sum of the linked list of rational numbers
 sum_rat(linked{rat{1, 2}, linked{rat{3, 4}, linked{rat{5, 6}, nil{_n}}}});
 
+
+
+// a scheme to implement mono type lists
+
+generic_linked{_t{_x,_y},_t} = 1 ;
+generic_linked{_t{_x,_y},generic_linked{_t{_w1,_w2},_z}} = 1;
+generic_push(_type{_x,_y},
+              _type) =
+                        generic_linked{
+                              _type{_x,_y},
+                              _type};
+
+generic_push( generic_linked{
+                      _t{_w1,_w2},
+                        _z},
+              _t{_x,_y}) = generic_linked{_t{_x,_y},generic_linked{
+                      _t{_w1,_w2},
+                        _z}};
+
+
+
+generic_linked{rat{0,1},
+       rat};
+
+
+generic_linked{complex{0,1},
+    generic_linked{complex{0,1},
+       complex}};
+
+generic_linked{rat{0,1},
+    generic_linked{rat{0,1},
+       rat}};
+
+
+generic_linked{complex{0,1},
+       complex};
+
+generic_linked{complex{1,1},generic_linked{rat{0,1},
+    generic_linked{rat{0,1},
+       rat}}}; // This should fail
+
+
+generic_push(generic_push(complex{1,2},complex),complex{1,3});
+
+
 // Lazy calls (or macros) can pattern match everything
 
 f[_x + _y] = f[_x] - f[_y] ;
@@ -140,26 +185,3 @@ f[_x] = _x;
 f[1+2+3+4+5+6+7+8];
 
 
-lr{_rat{_x,_y},_rat} = 1 ;
-lr{_rat{_x,_y},lr{_rat{_w1,_w2},_z}} = 1;
-
-lr{rat{0,1},
-       rat};
-
-
-
-lr{complex{0,1},
-    lr{complex{0,1},
-       complex}};
-
-lr{rat{0,1},
-    lr{rat{0,1},
-       rat}};
-
-
-lr{complex{0,1},
-       complex};
-
-lr{complex{1,1},lr{rat{0,1},
-    lr{rat{0,1},
-       rat}}};
