@@ -1,7 +1,0 @@
-p{a,b} = 1 ;
- id(x) = x ; 
-id[x]=x ; 
-f[a+b+c] = id(id[p{a,p{b,p{f[a+b] , p{f[a+c], p[b+c] } }}}]) ;
- f[a+b] = id(id[p{a,b}]) ; 
-f[a] = a ; 
-f[1+2+3+4]
